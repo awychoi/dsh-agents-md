@@ -92,9 +92,12 @@
   <text x="1065" y="107" class="ui btn-text" font-size="11" text-anchor="middle">Save</text>
   <line x1="752" y1="138" x2="1172" y2="138" class="line"/>
 
-  <!-- Restored banner -->
-  <rect x="768" y="152" width="388" height="32" rx="7" fill="#eef2f7"/>
-  <text x="782" y="172" class="ui secondary" font-size="10.5">Restored an unsaved draft.</text>
+  <!-- Git switch row -->
+  <rect x="768" y="150" width="388" height="32" rx="7" fill="#f8fafc" stroke="#eef2f7"/>
+  <rect x="778" y="157" width="30" height="18" rx="9" fill="#d4d4d4"/>
+  <circle cx="787" cy="166" r="7" fill="#ffffff"/>
+  <text x="818" y="170" class="ui secondary" font-size="10.5">Include AGENTS.md in Git</text>
+  <text x="1144" y="170" class="ui muted" font-size="10" text-anchor="end">Ignored by .gitignore</text>
 
   <!-- Markdown content -->
   <text x="768" y="220" class="code ink" font-size="13" font-weight="700"># AGENTS.md</text>

@@ -9,6 +9,7 @@ window.__ModuleLoader__.load({
     const KIND = 'agents-md'
     const ROUTE_PATH = '/plugins/agents-md'
     const DRAFT_ROUTE_PATH = '/plugins/agents-md/draft'
+    const GIT_ROUTE_PATH = '/plugins/agents-md/gitignore'
     const DRAFT_PREFIX = 'dsh.agents-md.draft.v1:'
     const DRAFT_DELAY_MS = 300
     const MAX_EDITOR_BYTES = 2 * 1024 * 1024
@@ -35,8 +36,9 @@ window.__ModuleLoader__.load({
       'draftPersisted': 'Draft kept, not saved',
       'upToDate': 'Up to date',
       'restored': 'Restored an unsaved draft. Save to let the agent see it.',
-      'created': 'Created AGENTS.md in this workspace.',
-      'createFailed': 'AGENTS.md could not be created automatically ({reason}). You can still draft; saving may fail.',
+      'templateHint': 'Starter template. Save to create AGENTS.md in this workspace.',
+      'notCreated': 'Not created yet',
+      'notCreatedHint': 'This template is not on disk until you save.',
       'conflict': 'AGENTS.md changed on disk since it was opened. Reload to get the latest version.',
       'reload': 'Reload',
       'reloadTitle': 'Discard unsaved changes and reload AGENTS.md from disk',
@@ -50,6 +52,20 @@ window.__ModuleLoader__.load({
       'characters': '{count} characters',
       'loadFailedHint': 'The file may be unavailable, too large, or outside the session workspace.',
       'draftPersistedHint': 'This unsaved draft survives DSH restarts. The agent only reads it after Save.',
+      'gitInclude': 'Include {file} in Git',
+      'gitSwitchAria': 'Include {file} in Git',
+      'gitIgnored': 'Ignored by .gitignore',
+      'gitNotIgnored': 'Not ignored',
+      'gitPendingIgnore': 'Will be ignored when saved',
+      'gitPendingInclude': 'Not ignored; will be committed when saved',
+      'gitUpdating': 'Updating .gitignore…',
+      'gitLoading': 'Reading .gitignore…',
+      'gitNoRepo': 'No Git repository; using the workspace .gitignore.',
+      'gitBlockedHint': 'Ignored by another pattern',
+      'gitBlocked': 'Still ignored by "{pattern}". Edit .gitignore manually to include this file.',
+      'gitError': 'Could not update .gitignore: {message}',
+      'gitNotApplied': 'The Git preference could not be applied.',
+      'gitTracked': 'Already tracked by Git; .gitignore will not remove it from commits.',
     }
 
     const zh = {
@@ -74,8 +90,9 @@ window.__ModuleLoader__.load({
       'draftPersisted': '草稿已保留，未保存',
       'upToDate': '已是最新',
       'restored': '已恢复未保存的草稿。保存后智能体才能看到。',
-      'created': '已在此工作区创建 AGENTS.md。',
-      'createFailed': '无法自动创建 AGENTS.md（{reason}）。仍可编辑草稿，但保存可能失败。',
+      'templateHint': '起始模板。保存后才会在此工作区创建 AGENTS.md。',
+      'notCreated': '尚未创建',
+      'notCreatedHint': '在保存前，此模板不会写入磁盘。',
       'conflict': '打开后 AGENTS.md 已在磁盘上更改。请重新加载最新版本。',
       'reload': '重新加载',
       'reloadTitle': '放弃未保存的更改并从磁盘重新加载 AGENTS.md',
@@ -89,6 +106,20 @@ window.__ModuleLoader__.load({
       'characters': '{count} 个字符',
       'loadFailedHint': '文件可能不可用、过大，或位于会话工作区之外。',
       'draftPersistedHint': '未保存的草稿在 DSH 重启后仍会保留。只有保存后智能体才会读取。',
+      'gitInclude': '将 {file} 纳入 Git',
+      'gitSwitchAria': '将 {file} 纳入 Git',
+      'gitIgnored': '已被 .gitignore 忽略',
+      'gitNotIgnored': '未被忽略',
+      'gitPendingIgnore': '保存后将自动忽略',
+      'gitPendingInclude': '未被忽略，保存后将可提交',
+      'gitUpdating': '正在更新 .gitignore…',
+      'gitLoading': '正在读取 .gitignore…',
+      'gitNoRepo': '未检测到 Git 仓库；使用工作区 .gitignore。',
+      'gitBlockedHint': '被其他规则忽略',
+      'gitBlocked': '仍被“{pattern}”忽略。请手动编辑 .gitignore 以纳入此文件。',
+      'gitError': '无法更新 .gitignore：{message}',
+      'gitNotApplied': '无法应用 Git 偏好设置。',
+      'gitTracked': '此文件已被 Git 跟踪；.gitignore 不会将其从提交中移除。',
     }
 
     const css = `
@@ -244,6 +275,69 @@ window.__ModuleLoader__.load({
         text-decoration: underline;
         text-underline-offset: 2px;
         cursor: pointer;
+      }
+      .amd-gitbar {
+        display: flex;
+        flex: none;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 16px;
+        border-bottom: .5px solid var(--dsw-alias-border-l1);
+        color: var(--dsw-alias-label-secondary);
+        font-size: 12px;
+        line-height: 18px;
+      }
+      .amd-switch {
+        position: relative;
+        width: 30px;
+        height: 18px;
+        padding: 0;
+        border: 0;
+        border-radius: 999px;
+        background: var(--dsw-alias-state-idle-primary);
+        cursor: pointer;
+        flex: none;
+        transition: background .15s ease, opacity .12s ease;
+      }
+      .amd-switch[aria-checked=true] {
+        background: var(--dsw-alias-state-business-primary);
+      }
+      .amd-switch:disabled {
+        opacity: .5;
+        cursor: default;
+      }
+      .amd-switch:focus-visible {
+        outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+        outline-offset: 2px;
+      }
+      .amd-switch-thumb {
+        position: absolute;
+        top: 2px;
+        left: 2px;
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+        background: var(--dsw-alias-switch-thumb);
+        box-shadow: 0 1px 2px color-mix(in srgb, #000 20%, transparent);
+        transition: transform .15s ease;
+      }
+      .amd-switch[aria-checked=true] .amd-switch-thumb {
+        transform: translateX(12px);
+      }
+      .amd-git-label {
+        white-space: nowrap;
+      }
+      .amd-git-hint {
+        min-width: 0;
+        color: var(--dsw-alias-label-tertiary);
+        font-size: 11px;
+      }
+      .amd-git-hint[data-kind=warn] {
+        color: var(--dsw-alias-state-warn-label);
+      }
+      .amd-git-hint[data-kind=error] {
+        color: var(--dsw-alias-state-error-primary);
       }
       .amd-editor-wrap {
         display: flex;
@@ -438,7 +532,7 @@ window.__ModuleLoader__.load({
       return body.file
     }
 
-    async function saveFile(sessionId, content, version) {
+    async function saveFile(sessionId, content, version, includeInGit) {
       const response = await fetch(`${ROUTE_PATH}?sessionId=${encodeURIComponent(sessionId)}`, {
         method: 'POST',
         headers: {
@@ -448,11 +542,11 @@ window.__ModuleLoader__.load({
         },
         credentials: 'same-origin',
         cache: 'no-store',
-        body: JSON.stringify({ content, version }),
+        body: JSON.stringify({ content, version, includeInGit }),
       })
       const body = await response.json().catch(() => undefined)
       if (!response.ok || body?.ok !== true) throw responseError(response, body)
-      return body.file
+      return body
     }
 
     /**
@@ -482,6 +576,36 @@ window.__ModuleLoader__.load({
 
     async function clearHostDraft(sessionId, keepalive = false) {
       return saveHostDraft(sessionId, null, Date.now(), keepalive)
+    }
+
+    async function fetchGitState(sessionId, signal) {
+      const response = await fetch(`${GIT_ROUTE_PATH}?sessionId=${encodeURIComponent(sessionId)}`, {
+        method: 'GET',
+        headers: { accept: 'application/json' },
+        credentials: 'same-origin',
+        cache: 'no-store',
+        signal,
+      })
+      const body = await response.json().catch(() => undefined)
+      if (!response.ok || body?.ok !== true) throw responseError(response, body)
+      return body.git
+    }
+
+    async function setGitInclude(sessionId, include) {
+      const response = await fetch(`${GIT_ROUTE_PATH}?sessionId=${encodeURIComponent(sessionId)}`, {
+        method: 'POST',
+        headers: {
+          accept: 'application/json',
+          'content-type': 'application/json',
+          'x-dsh-agents-md': '1',
+        },
+        credentials: 'same-origin',
+        cache: 'no-store',
+        body: JSON.stringify({ include }),
+      })
+      const body = await response.json().catch(() => undefined)
+      if (!response.ok || body?.ok !== true) throw responseError(response, body)
+      return body.git
     }
 
     function messageFor(t, error) {
@@ -515,9 +639,14 @@ window.__ModuleLoader__.load({
 
       const [phase, setPhase] = React.useState('loading')
       const [saved, setSaved] = React.useState('')
+      const [exists, setExists] = React.useState(false)
       const [draft, setDraft] = React.useState('')
       const [version, setVersion] = React.useState(null)
       const [filePath, setFilePath] = React.useState('')
+      const [fileName, setFileName] = React.useState('AGENTS.md')
+      const [git, setGit] = React.useState(null)
+      const [gitBusy, setGitBusy] = React.useState(false)
+      const [gitError, setGitError] = React.useState('')
       const [restored, setRestored] = React.useState(false)
       const [saving, setSaving] = React.useState(false)
       const [notice, setNotice] = React.useState(null)
@@ -575,6 +704,11 @@ window.__ModuleLoader__.load({
           setSaved('')
           setDraft('')
           setFilePath('')
+          setFileName('AGENTS.md')
+          setExists(false)
+          setGit(null)
+          setGitBusy(false)
+          setGitError('')
           setNotice(null)
           setConflict(false)
           setRestored(false)
@@ -592,10 +726,14 @@ window.__ModuleLoader__.load({
         setConflict(false)
         setRestored(false)
         setLoadError('')
+        setGit(null)
+        setGitBusy(false)
+        setGitError('')
 
         fetchFile(sid, controller.signal)
           .then((file) => {
             const fileContent = typeof file?.content === 'string' ? file.content : ''
+            const fileExists = file?.exists === true
             const localDraft = discardDraft ? undefined : readDraft(key)
             const chosen = discardDraft ? undefined : chooseDraft(file?.draft, localDraft, fileContent)
             const nextDraft = chosen !== undefined ? chosen.content : fileContent
@@ -615,13 +753,20 @@ window.__ModuleLoader__.load({
             setDraft(nextDraft)
             setVersion(typeof file?.version === 'string' ? file.version : null)
             setFilePath(typeof file?.path === 'string' ? file.path : 'AGENTS.md')
+            setFileName(typeof file?.name === 'string' && file.name.length > 0 ? file.name : 'AGENTS.md')
+            setExists(fileExists)
             setRestored(wasRestored)
             setPhase('ready')
-            if (typeof file?.warning === 'string' && file.warning.length > 0) {
-              setNotice({ kind: 'warn', text: t('createFailed', { reason: file.warning }) })
-            } else if (file?.created === true) {
-              setNotice({ kind: 'info', text: t('created') })
-            }
+            fetchGitState(sid, controller.signal)
+              .then((state) => {
+                if (controller.signal.aborted) return
+                setGit(state)
+                setGitError('')
+              })
+              .catch((error) => {
+                if (controller.signal.aborted || error?.name === 'AbortError') return
+                setGitError(messageFor(t, error))
+              })
           })
           .catch((error) => {
             if (error?.name === 'AbortError') return
@@ -638,6 +783,40 @@ window.__ModuleLoader__.load({
           clearTimeout(timerRef.current)
         }
       }, [sessionId, cwd, reloadTick, queueHostDraft])
+
+      React.useEffect(() => {
+        if (phase !== 'ready' || gitBusy || saving) return undefined
+        let cancelled = false
+        let inFlight = false
+        const refresh = async () => {
+          if (cancelled || inFlight || document.visibilityState === 'hidden') return
+          inFlight = true
+          try {
+            const state = await fetchGitState(sessionId)
+            if (!cancelled) {
+              setGit(state)
+              setGitError('')
+            }
+          } catch {
+            // Keep the last known switch state; a transient read must not move it.
+          } finally {
+            inFlight = false
+          }
+        }
+        const interval = setInterval(refresh, 4000)
+        const onFocus = () => { void refresh() }
+        const onVisibility = () => {
+          if (document.visibilityState === 'visible') void refresh()
+        }
+        window.addEventListener('focus', onFocus)
+        document.addEventListener('visibilitychange', onVisibility)
+        return () => {
+          cancelled = true
+          clearInterval(interval)
+          window.removeEventListener('focus', onFocus)
+          document.removeEventListener('visibilitychange', onVisibility)
+        }
+      }, [phase, sessionId, gitBusy, saving])
 
       const dirty = draft !== saved
       const editorDisabled = phase !== 'ready' || saving
@@ -678,8 +857,44 @@ window.__ModuleLoader__.load({
         setReloadTick((tick) => tick + 1)
       }
 
+      const toggleGit = async () => {
+        if (phase !== 'ready' || saving || gitBusy || git === null) return
+        const include = !git.include
+        setGitBusy(true)
+        setNotice(null)
+        try {
+          const next = await setGitInclude(sessionId, include)
+          setGit(next)
+          setGitError('')
+          if (next.include !== include && !next.blockedBy) {
+            setNotice({ kind: 'warn', text: t('gitNotApplied') })
+          }
+        } catch (error) {
+          setNotice({ kind: 'error', text: t('gitError', { message: error?.message ?? String(error) }) })
+        } finally {
+          setGitBusy(false)
+        }
+      }
+
+      const gitHint = (() => {
+        if (gitError.length > 0) return { text: gitError, kind: 'error' }
+        if (git === null) return { text: t('gitLoading'), kind: 'info' }
+        if (gitBusy) return { text: t('gitUpdating'), kind: 'info' }
+        if (typeof git.warning === 'string' && git.warning.length > 0) {
+          return { text: t('gitError', { message: git.warning }), kind: 'warn' }
+        }
+        if (!git.hasGit) return { text: t('gitNoRepo'), kind: 'info' }
+        if (git.include) {
+          return { text: git.fileExists ? t('gitNotIgnored') : t('gitPendingInclude'), kind: 'info' }
+        }
+        if (!git.fileExists) return { text: t('gitPendingIgnore'), kind: 'info' }
+        if (git.blockedBy) return { text: t('gitBlockedHint'), kind: 'warn' }
+        return { text: t('gitIgnored'), kind: 'info' }
+      })()
+
       const save = async () => {
-        if (saving || conflict || !dirty || phase !== 'ready') return
+        if (saving || conflict || gitBusy || phase !== 'ready') return
+        if (!dirty && exists) return
         if (typeof cwd !== 'string' || cwd.length === 0) return
         const content = draft
         const key = draftKey(cwd)
@@ -691,12 +906,23 @@ window.__ModuleLoader__.load({
         setNotice(null)
         setConflict(false)
         try {
-          const file = await saveFile(sessionId, content, version)
+          const result = await saveFile(sessionId, content, version, git?.include === true)
+          const file = result.file
           savedRef.current = content
           setSaved(content)
           setVersion(typeof file?.version === 'string' ? file.version : null)
           setFilePath(typeof file?.path === 'string' ? file.path : filePath)
+          setFileName(typeof file?.name === 'string' && file.name.length > 0 ? file.name : fileName)
+          setExists(true)
           setRestored(false)
+          if (result.git !== undefined) {
+            setGit(typeof result.gitWarning === 'string'
+              ? { ...result.git, warning: result.gitWarning }
+              : result.git)
+            setGitError('')
+          } else if (typeof result.gitWarning === 'string') {
+            setGitError(t('gitError', { message: result.gitWarning }))
+          }
           clearTimeout(timerRef.current)
           if (draftRef.current === content) {
             removeDraft(key)
@@ -732,9 +958,11 @@ window.__ModuleLoader__.load({
           ? { text: t('unsaved'), kind: 'error', dirty: true }
           : dirty
             ? { text: t('draftPersisted'), kind: 'info', dirty: true }
-            : notice?.kind === 'success'
-              ? { text: t('savedShort'), kind: 'success', dirty: false }
-              : { text: t('upToDate'), kind: 'info', dirty: false }
+            : !exists
+              ? { text: t('notCreated'), kind: 'info', dirty: false }
+              : notice?.kind === 'success'
+                ? { text: t('savedShort'), kind: 'success', dirty: false }
+                : { text: t('upToDate'), kind: 'info', dirty: false }
 
       const lines = countLines(draft)
       const characters = draft.length
@@ -744,7 +972,7 @@ window.__ModuleLoader__.load({
         h('div', { className: 'amd-head', key: 'head' }, [
           h('div', { className: 'amd-heading', key: 'heading' }, [
             h('div', { className: 'amd-title-row', key: 'row' }, [
-              h('span', { className: 'amd-title', key: 'title', title: t('head.subtitle') }, t('head.title')),
+              h('span', { className: 'amd-title', key: 'title', title: t('head.subtitle') }, fileName),
               dirty && h('span', { className: 'amd-dirty', key: 'dirty', role: 'status', title: t('draftPersistedHint') }, [
                 h(StatusDot, { key: 'dot' }),
                 t('unsaved'),
@@ -770,10 +998,44 @@ window.__ModuleLoader__.load({
               className: 'amd-button amd-primary',
               key: 'save',
               onClick: save,
-              disabled: !dirty || saving || conflict || phase !== 'ready' || typeof cwd !== 'string',
+              disabled: (!dirty && exists) || saving || gitBusy || conflict || phase !== 'ready' || typeof cwd !== 'string',
             }, saving ? t('saving') : t('save')),
           ]),
         ]),
+
+        phase === 'ready' && h('div', { className: 'amd-gitbar', key: 'git' }, [
+          h('button', {
+            type: 'button',
+            role: 'switch',
+            className: 'amd-switch',
+            key: 'switch',
+            'aria-checked': git?.include === true,
+            'aria-label': t('gitSwitchAria', { file: fileName }),
+            disabled: git === null || gitBusy || saving,
+            onClick: toggleGit,
+          }, h('span', { className: 'amd-switch-thumb', key: 'thumb' })),
+          h('span', { className: 'amd-git-label', key: 'label' }, t('gitInclude', { file: fileName })),
+          h('span', {
+            className: 'amd-git-hint',
+            key: 'hint',
+            'data-kind': gitHint.kind,
+            title: gitHint.text,
+          }, gitHint.text),
+        ]),
+
+        phase === 'ready' && git?.tracked === true && git?.fileExists === true && h('div', {
+          className: 'amd-banner',
+          key: 'git-tracked',
+          'data-kind': 'warn',
+          role: 'status',
+        }, h('span', { className: 'amd-banner-text', key: 'text' }, t('gitTracked'))),
+
+        phase === 'ready' && typeof git?.blockedBy === 'string' && h('div', {
+          className: 'amd-banner',
+          key: 'git-blocked',
+          'data-kind': 'warn',
+          role: 'status',
+        }, h('span', { className: 'amd-banner-text', key: 'text' }, t('gitBlocked', { pattern: git.blockedBy }))),
 
         conflict && h('div', { className: 'amd-banner', key: 'conflict', 'data-kind': 'error', role: 'alert' }, [
           h('span', { className: 'amd-banner-text', key: 'text' }, t('conflict')),
@@ -793,6 +1055,13 @@ window.__ModuleLoader__.load({
           'data-kind': 'info',
           role: 'status',
         }, h('span', { className: 'amd-banner-text', key: 'text' }, t('restored'))),
+
+        !conflict && notice === null && !restored && phase === 'ready' && !exists && h('div', {
+          className: 'amd-banner',
+          key: 'template',
+          'data-kind': 'info',
+          role: 'status',
+        }, h('span', { className: 'amd-banner-text', key: 'text' }, t('templateHint'))),
 
         phase === 'loading' && h('div', { className: 'amd-center', key: 'loading', role: 'status' }, [
           h('span', { className: 'amd-pulse', key: 'pulse', 'aria-hidden': true }),
@@ -836,7 +1105,7 @@ window.__ModuleLoader__.load({
             'data-kind': status.kind,
             role: 'status',
             'aria-live': 'polite',
-            title: status.dirty ? t('draftPersistedHint') : undefined,
+            title: status.dirty ? t('draftPersistedHint') : (!exists ? t('notCreatedHint') : undefined),
           }, status.text),
         ]),
       ])

@@ -2,9 +2,9 @@
  * AGENTS.md — Host half.
  *
  * Owns the workspace `AGENTS.md` file on behalf of the right-sidebar editor:
- * a same-origin read/write route scoped to a live session's workspace, plus a
- * first-prompt seed so a workspace without the file gets the starter template
- * before DSH's workspace-instruction loader assembles its baseline.
+ * a same-origin read/write route scoped to a live session's workspace.
+ * Opening the editor reads the file or returns a template; it never creates
+ * the file. Only an explicit Save writes it.
  *
  * DSH's `@deepseek-ai/dsh-agent-instructions` plugin does the model-facing
  * work: it probes the instruction files on every `agent/pre-step` and injects
@@ -16,19 +16,22 @@ import { randomUUID } from 'node:crypto'
 import { mkdir, readFile as readDiskFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
+import { applyGitPreference, readGitState } from './gitignore.js'
 
 const ROUTE_PATH = '/plugins/agents-md'
 const DRAFT_ROUTE_PATH = '/plugins/agents-md/draft'
+const GIT_ROUTE_PATH = '/plugins/agents-md/gitignore'
 const FILE_NAME = 'AGENTS.md'
+const AGENT_FILE_RE = /^agents?\.md$/i
 const DRAFT_DIR_NAME = 'agents-md'
 const DRAFT_FILE_NAME = 'drafts.json'
+const GIT_STATE_FILE_NAME = 'git.json'
 const DRAFT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
 const MAX_EDITOR_BYTES = 2 * 1024 * 1024
 // JSON escaping can expand a 2 MiB markdown file; the decoded content is re-checked.
 const MAX_BODY_BYTES = MAX_EDITOR_BYTES * 4
-const SEED_RETRY_MS = 60_000
 
-/** Written only when a workspace has no AGENTS.md yet. */
+/** Template shown when a workspace has no AGENTS.md. It is only written by Save. */
 const STARTER_CONTENT = `# AGENTS.md
 
 Guidance for AI agents working in this workspace. Edit this file from DSH's
@@ -194,6 +197,87 @@ function createDraftStore() {
   }
 }
 
+/**
+ * Per-workspace Git preferences. `defaultApplied` records that the plugin has
+ * already applied its default ignore policy once, so a later manual edit of
+ * `.gitignore` is never fought. `include` is used only before a file exists.
+ */
+function createGitStateStore() {
+  const directory = join(resolveDshHome(), DRAFT_DIR_NAME)
+  const filePath = join(directory, GIT_STATE_FILE_NAME)
+  let entries
+  let loading
+  let writes = Promise.resolve()
+
+  async function readEntries() {
+    const next = new Map()
+    try {
+      const raw = await readDiskFile(filePath, 'utf8')
+      const parsed = JSON.parse(raw)
+      const stored = parsed?.workspaces
+      if (stored !== null && typeof stored === 'object' && !Array.isArray(stored)) {
+        for (const [cwd, value] of Object.entries(stored)) {
+          if (cwd.length === 0 || cwd.length > 4096) continue
+          if (value === null || typeof value !== 'object') continue
+          next.set(cwd, {
+            defaultApplied: value.defaultApplied === true,
+            ...typeof value.include === 'boolean' ? { include: value.include } : {},
+          })
+        }
+      }
+    } catch {
+      // Missing or malformed state starts clean.
+    }
+    entries = next
+    return entries
+  }
+
+  function load() {
+    if (entries !== undefined) return Promise.resolve(entries)
+    if (loading !== undefined) return loading
+    loading = readEntries().finally(() => {
+      loading = undefined
+    })
+    return loading
+  }
+
+  function persist() {
+    const task = writes.then(async () => {
+      const map = entries ?? new Map()
+      const body = JSON.stringify({ version: 1, workspaces: Object.fromEntries(map) }, null, 2)
+      const temp = `${filePath}.${process.pid}.${randomUUID()}.tmp`
+      try {
+        await mkdir(directory, { recursive: true, mode: 0o700 })
+        await writeFile(temp, body, { mode: 0o600 })
+        await rename(temp, filePath)
+        return true
+      } catch {
+        try {
+          await unlink(temp)
+        } catch {
+          // The temporary file may never have been created.
+        }
+        return false
+      }
+    }).catch(() => false)
+    writes = task.then(() => undefined)
+    return task
+  }
+
+  return {
+    async get(cwd) {
+      const map = await load()
+      const value = map.get(cwd)
+      return value === undefined ? undefined : { ...value }
+    },
+    async set(cwd, patch) {
+      const map = await load()
+      map.set(cwd, { ...(map.get(cwd) ?? {}), ...patch })
+      return persist()
+    },
+  }
+}
+
 function sendJson(response, status, value) {
   const body = JSON.stringify(value)
   response.writeHead(status, {
@@ -303,13 +387,46 @@ function policyFor(ctx, session, cwd) {
   }
 }
 
-async function resolveTarget(ctx, cwd) {
+/**
+ * The editor follows whichever agent-instruction spelling already exists in
+ * the workspace. `AGENTS.md` wins when several variants are present, then the
+ * plural and singular lowercase forms, then a stable name order.
+ */
+async function findActiveFile(ctx, cwd) {
   const fs = ctx.get('fs')
   if (fs === undefined) {
     throw requestError(503, 'fs-unavailable', 'the filesystem service is not available')
   }
+
+  let entries = []
+  try {
+    const directory = await fs.resolve(cwd)
+    entries = await fs.listDir(directory)
+  } catch {
+    // An unreadable directory falls back to the canonical path; Save will
+    // report the real filesystem error.
+  }
+
+  const candidates = entries
+    .filter((entry) => entry.type === 'file' && AGENT_FILE_RE.test(entry.name))
+    .sort((left, right) => {
+      const rank = (name) => {
+        if (name === FILE_NAME) return 0
+        if (name.toLowerCase() === 'agents.md') return 1
+        if (name.toLowerCase() === 'agent.md') return 2
+        return 3
+      }
+      return rank(left.name) - rank(right.name) || left.name.localeCompare(right.name)
+    })
+
+  const chosen = candidates[0]
+  if (chosen !== undefined) {
+    const target = chosen.target ?? await fs.resolve(join(cwd, chosen.name))
+    return { fs, target, fileName: chosen.name, exists: true }
+  }
+
   const target = await fs.resolve(join(cwd, FILE_NAME))
-  return { fs, target }
+  return { fs, target, fileName: FILE_NAME, exists: false }
 }
 
 async function statFile(fs, target) {
@@ -332,69 +449,35 @@ async function readFile(fs, target) {
 }
 
 /**
- * Read the file, creating the starter template when it is absent. A failed
- * creation (for example a read-only sandbox) still returns the starter so the
- * editor can show a draft; `warning` tells the Client it cannot save yet.
+ * Read the file, or return the template when it is absent. This function is
+ * deliberately read-only: opening the panel must not create a file. The
+ * Client's Save sends `version: null`, and `saveFile` creates the file then.
  */
-async function loadFile(ctx, session, cwd) {
-  const { fs, target } = await resolveTarget(ctx, cwd)
-  const existing = await readFile(fs, target)
+async function loadFile(ctx, cwd) {
+  const active = await findActiveFile(ctx, cwd)
+  const existing = await readFile(active.fs, active.target)
   if (existing !== undefined) {
     return {
-      path: target.displayPath,
+      name: active.fileName,
+      path: active.target.displayPath,
       cwd,
       exists: true,
-      created: false,
+      template: false,
       content: existing.content,
       version: existing.version,
       size: existing.size,
     }
   }
 
-  try {
-    const result = await fs.writeText(
-      target,
-      STARTER_CONTENT,
-      { kind: 'createIfAbsent' },
-      undefined,
-      policyFor(ctx, session, cwd),
-    )
-    return {
-      path: target.displayPath,
-      cwd,
-      exists: true,
-      created: true,
-      content: STARTER_CONTENT,
-      version: result.version,
-      size: Buffer.byteLength(STARTER_CONTENT),
-    }
-  } catch (error) {
-    const code = errorCode(error)
-    // Lost a create race: another reader created it between stat and write.
-    if (code === 'FS_NOT_OBSERVED' || code === 'FS_STALE_VERSION') {
-      const again = await readFile(fs, target)
-      if (again !== undefined) {
-        return {
-          path: target.displayPath,
-          cwd,
-          exists: true,
-          created: false,
-          content: again.content,
-          version: again.version,
-          size: again.size,
-        }
-      }
-    }
-    return {
-      path: target.displayPath,
-      cwd,
-      exists: false,
-      created: false,
-      content: STARTER_CONTENT,
-      version: null,
-      size: Buffer.byteLength(STARTER_CONTENT),
-      warning: code ?? 'FS_IO_ERROR',
-    }
+  return {
+    name: active.fileName,
+    path: active.target.displayPath,
+    cwd,
+    exists: false,
+    template: true,
+    content: STARTER_CONTENT,
+    version: null,
+    size: Buffer.byteLength(STARTER_CONTENT),
   }
 }
 
@@ -411,9 +494,34 @@ function parseSaveBody(body) {
   if (body.version !== null && body.version !== undefined && !isNonEmptyString(body.version)) {
     throw requestError(400, 'bad-request', 'version must be a string or null')
   }
+  if (body.includeInGit !== undefined && typeof body.includeInGit !== 'boolean') {
+    throw requestError(400, 'bad-request', 'includeInGit must be a boolean')
+  }
   return {
     content: body.content,
     version: body.version ?? null,
+    includeInGit: body.includeInGit === true,
+  }
+}
+
+function parseGitBody(body) {
+  if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+    throw requestError(400, 'bad-request', 'request body must be a JSON object')
+  }
+  if (typeof body.include !== 'boolean') {
+    throw requestError(400, 'bad-request', 'include must be a boolean')
+  }
+  return { include: body.include }
+}
+
+function gitPayload(state, active, include, defaultApplied, warning) {
+  return {
+    ...state,
+    fileName: active.fileName,
+    fileExists: active.exists,
+    include,
+    defaultApplied,
+    ...warning === undefined ? {} : { warning },
   }
 }
 
@@ -441,17 +549,18 @@ function parseDraftBody(body) {
  * true; a string means "replace exactly this observed version".
  */
 async function saveFile(ctx, session, cwd, content, version) {
-  const { fs, target } = await resolveTarget(ctx, cwd)
+  const active = await findActiveFile(ctx, cwd)
+  const { fs, target } = active
   const info = await fs.stat(target)
   if (info !== undefined && info.type !== 'file') {
-    throw requestError(409, 'not-a-file', `${FILE_NAME} is not a regular file`)
+    throw requestError(409, 'not-a-file', `${active.fileName} is not a regular file`)
   }
 
   if (version === null && info !== undefined) {
-    throw requestError(409, 'conflict', `${FILE_NAME} now exists on disk`)
+    throw requestError(409, 'conflict', `${active.fileName} now exists on disk`)
   }
   if (version !== null && info === undefined) {
-    throw requestError(409, 'conflict', `${FILE_NAME} no longer exists on disk`)
+    throw requestError(409, 'conflict', `${active.fileName} no longer exists on disk`)
   }
 
   const expected = version === null
@@ -467,6 +576,7 @@ async function saveFile(ctx, session, cwd, content, version) {
       policyFor(ctx, session, cwd),
     )
     return {
+      name: active.fileName,
       path: target.displayPath,
       cwd,
       version: result.version,
@@ -475,7 +585,7 @@ async function saveFile(ctx, session, cwd, content, version) {
   } catch (error) {
     const code = errorCode(error)
     if (code === 'FS_STALE_VERSION' || code === 'FS_NOT_OBSERVED') {
-      throw requestError(409, 'conflict', `${FILE_NAME} changed on disk since it was loaded`)
+      throw requestError(409, 'conflict', `${active.fileName} changed on disk since it was loaded`)
     }
     if (code === 'FS_SANDBOX_DENIED' || code === 'FS_READ_ONLY') {
       throw requestError(403, 'forbidden', error.message)
@@ -536,12 +646,12 @@ function requireEditorRequest(request) {
   }
 }
 
-function createFileRoute(ctx, drafts) {
+function createFileRoute(ctx, drafts, gitPrefs) {
   return async (request, response) => {
     try {
       if (request.method === 'GET') {
-        const { session, cwd } = await requireSession(ctx, request)
-        const file = await loadFile(ctx, session, cwd)
+        const { cwd } = await requireSession(ctx, request)
+        const file = await loadFile(ctx, cwd)
         const stored = await drafts.get(cwd)
         const draft = stored !== null && stored.content !== file.content ? stored : null
         if (stored !== null && draft === null) await drafts.clear(cwd, Date.now())
@@ -552,10 +662,101 @@ function createFileRoute(ctx, drafts) {
       if (request.method === 'POST') {
         requireEditorRequest(request)
         const { session, cwd } = await requireSession(ctx, request)
-        const { content, version } = parseSaveBody(await readJsonBody(request))
+        const { content, version, includeInGit } = parseSaveBody(await readJsonBody(request))
         const saved = await saveFile(ctx, session, cwd, content, version)
+        let git
+        let gitWarning
+        try {
+          const active = await findActiveFile(ctx, cwd)
+          const state = await applyGitPreference(
+            active.fs,
+            cwd,
+            active.fileName,
+            includeInGit,
+            policyFor(ctx, session, cwd),
+          )
+          await gitPrefs.set(cwd, { defaultApplied: true, include: !state.ignored })
+          git = gitPayload(state, active, !state.ignored, true)
+        } catch (error) {
+          gitWarning = String(error?.message ?? error)
+        }
         await drafts.clear(cwd, Date.now())
-        sendJson(response, 200, { ok: true, file: { ...saved, draft: null } })
+        sendJson(response, 200, {
+          ok: true,
+          file: { ...saved, draft: null },
+          ...git === undefined ? {} : { git },
+          ...gitWarning === undefined ? {} : { gitWarning },
+        })
+        return
+      }
+
+      sendJson(response, 405, { ok: false, error: 'method-not-allowed' })
+    } catch (error) {
+      sendRouteError(ctx, response, error)
+    }
+  }
+}
+
+function createGitRoute(ctx, gitPrefs) {
+  return async (request, response) => {
+    try {
+      if (request.method === 'GET') {
+        const { session, cwd } = await requireSession(ctx, request)
+        const active = await findActiveFile(ctx, cwd)
+        const preference = await gitPrefs.get(cwd)
+        let state = await readGitState(active.fs, cwd, active.fileName)
+        let defaultApplied = preference?.defaultApplied === true
+        let warning
+
+        if (active.exists && !defaultApplied) {
+          if (state.ignored) {
+            defaultApplied = true
+            await gitPrefs.set(cwd, { defaultApplied: true, include: false })
+          } else {
+            try {
+              state = await applyGitPreference(
+                active.fs,
+                cwd,
+                active.fileName,
+                false,
+                policyFor(ctx, session, cwd),
+              )
+              defaultApplied = true
+              await gitPrefs.set(cwd, { defaultApplied: true, include: !state.ignored })
+            } catch (error) {
+              warning = String(error?.message ?? error)
+            }
+          }
+        }
+
+        const include = active.exists
+          ? !state.ignored
+          : (state.ignored ? false : (preference?.include ?? false))
+        sendJson(response, 200, {
+          ok: true,
+          git: gitPayload(state, active, include, defaultApplied, warning),
+        })
+        return
+      }
+
+      if (request.method === 'POST') {
+        requireEditorRequest(request)
+        const { session, cwd } = await requireSession(ctx, request)
+        const { include } = parseGitBody(await readJsonBody(request))
+        const active = await findActiveFile(ctx, cwd)
+        const state = await applyGitPreference(
+          active.fs,
+          cwd,
+          active.fileName,
+          include,
+          policyFor(ctx, session, cwd),
+        )
+        const actualInclude = !state.ignored
+        await gitPrefs.set(cwd, { defaultApplied: true, include: actualInclude })
+        sendJson(response, 200, {
+          ok: true,
+          git: gitPayload(state, active, actualInclude, true),
+        })
         return
       }
 
@@ -586,58 +787,22 @@ function createDraftRoute(ctx, drafts) {
   }
 }
 
-/** Seeded workspaces in this process: success is permanent, failure backs off. */
-const seededWorkspaces = new Map()
-
-/**
- * Create `AGENTS.md` before the first prompt if the workspace has no file.
- * The built-in workspace-instruction loader runs later in the same pre-step
- * waterfall, so its first baseline already includes the starter file.
- */
-async function seedWorkspace(ctx, agent) {
-  const cwd = workingDirectoryOf(ctx, agent.session)
-  if (cwd === undefined) return
-  const cached = seededWorkspaces.get(cwd)
-  if (cached !== undefined && (cached.ok || Date.now() - cached.at < SEED_RETRY_MS)) return
-
-  const fs = ctx.get('fs')
-  if (fs === undefined) return
-
-  try {
-    const target = await fs.resolve(join(cwd, FILE_NAME))
-    if (await fs.stat(target) !== undefined) {
-      seededWorkspaces.set(cwd, { ok: true, at: Date.now() })
-      return
-    }
-    await fs.writeText(
-      target,
-      STARTER_CONTENT,
-      { kind: 'createIfAbsent' },
-      undefined,
-      policyFor(ctx, agent.session, cwd),
-    )
-    seededWorkspaces.set(cwd, { ok: true, at: Date.now() })
-  } catch (error) {
-    seededWorkspaces.set(cwd, { ok: false, at: Date.now() })
-    ctx.logger?.warn?.(`agents-md: could not create ${FILE_NAME} in ${cwd}: ${error?.message ?? error}`)
-  }
-}
-
 /** Required service; the filesystem and session services are read opportunistically. */
 export const inject = ['webServer']
 
 /**
- * Mount the AGENTS.md route and the first-prompt seed.
+ * Mount the AGENTS.md read/write and draft routes.
  * @param ctx - Host plugin context carrying the Web server.
  */
 export function apply(ctx) {
   const drafts = createDraftStore()
+  const gitPrefs = createGitStateStore()
 
   ctx.effect(
     () => ctx.webServer.register({
       kind: 'exact',
       path: ROUTE_PATH,
-      handler: createFileRoute(ctx, drafts),
+      handler: createFileRoute(ctx, drafts, gitPrefs),
     }),
     'agents-md: editor route',
   )
@@ -651,20 +816,23 @@ export function apply(ctx) {
     'agents-md: draft route',
   )
 
-  ctx.on(
-    'agent/pre-step',
-    async ({ agent }, next) => {
-      try {
-        await seedWorkspace(ctx, agent)
-      } catch (error) {
-        ctx.logger?.warn?.(`agents-md: seed skipped: ${error?.message ?? error}`)
-      }
-      return next()
-    },
-    { prepend: true },
+  ctx.effect(
+    () => ctx.webServer.register({
+      kind: 'exact',
+      path: GIT_ROUTE_PATH,
+      handler: createGitRoute(ctx, gitPrefs),
+    }),
+    'agents-md: gitignore route',
   )
 }
 
-export { STARTER_CONTENT, MAX_EDITOR_BYTES, FILE_NAME, ROUTE_PATH, DRAFT_ROUTE_PATH }
+export {
+  STARTER_CONTENT,
+  MAX_EDITOR_BYTES,
+  FILE_NAME,
+  ROUTE_PATH,
+  DRAFT_ROUTE_PATH,
+  GIT_ROUTE_PATH,
+}
 
-export { createDraftStore }
+export { createDraftStore, createGitStateStore }

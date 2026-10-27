@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test, { after } from 'node:test'
-import { apply, createDraftStore, DRAFT_ROUTE_PATH, FILE_NAME, STARTER_CONTENT } from '../index.js'
+import { apply, createDraftStore, DRAFT_ROUTE_PATH, FILE_NAME, GIT_ROUTE_PATH, STARTER_CONTENT } from '../index.js'
 
 const SESSION_ID = 'session-test'
 const CWD = '/tmp/agents-md-test-workspace'
@@ -14,16 +14,18 @@ after(() => {
   rmSync(TEST_DSH_HOME, { recursive: true, force: true })
 })
 
-function clearDrafts() {
+function clearPluginState() {
   rmSync(join(TEST_DSH_HOME, 'agents-md', 'drafts.json'), { force: true })
+  rmSync(join(TEST_DSH_HOME, 'agents-md', 'git.json'), { force: true })
 }
 
 function makeHarness({ files = new Map() } = {}) {
-  clearDrafts()
+  clearPluginState()
   const routes = new Map()
   const listeners = []
   let versionCounter = 0
   const versions = new Map()
+  for (const path of files.keys()) versions.set(path, `seed:${path}`)
 
   const fs = {
     async resolve(path) {
@@ -39,6 +41,16 @@ function makeHarness({ files = new Map() } = {}) {
     },
     async readText(target) {
       return files.get(target.targetKey)
+    },
+    async listDir(directory) {
+      const prefix = directory.targetKey.endsWith('/') ? directory.targetKey : `${directory.targetKey}/`
+      return [...files.keys()]
+        .filter((path) => path.startsWith(prefix) && !path.slice(prefix.length).includes('/'))
+        .map((path) => ({
+          name: path.slice(prefix.length),
+          type: 'file',
+          target: { targetKey: path, displayPath: path },
+        }))
     },
     async writeText(target, content, expected) {
       const exists = files.has(target.targetKey)
@@ -124,16 +136,16 @@ function invoke(handler, { method = 'GET', url = `/plugins/agents-md?sessionId=$
   }))
 }
 
-test('GET creates the starter file and returns its version', async () => {
+test('GET returns the template without creating AGENTS.md', async () => {
   const harness = makeHarness()
   const result = await invoke(harness.routes.get('/plugins/agents-md'))
   assert.equal(result.status, 200)
   assert.equal(result.body.ok, true)
-  assert.equal(result.body.file.created, true)
-  assert.equal(result.body.file.exists, true)
+  assert.equal(result.body.file.exists, false)
+  assert.equal(result.body.file.template, true)
   assert.equal(result.body.file.content, STARTER_CONTENT)
-  assert.match(result.body.file.version, /^v\d+$/)
-  assert.equal(harness.files.get(`${CWD}/${FILE_NAME}`), STARTER_CONTENT)
+  assert.equal(result.body.file.version, null)
+  assert.equal(harness.files.has(`${CWD}/${FILE_NAME}`), false)
   assert.equal(result.headers['cache-control'], 'no-store')
 })
 
@@ -142,41 +154,66 @@ test('GET returns an existing file without overwriting it', async () => {
   const harness = makeHarness({ files })
   const result = await invoke(harness.routes.get('/plugins/agents-md'))
   assert.equal(result.status, 200)
-  assert.equal(result.body.file.created, false)
+  assert.equal(result.body.file.exists, true)
+  assert.equal(result.body.file.template, false)
   assert.equal(result.body.file.content, '# Mine\n')
   assert.equal(files.get(`${CWD}/${FILE_NAME}`), '# Mine\n')
 })
 
-test('POST saves with a matching version', async () => {
+test('the plugin does not register a prompt-time seed', () => {
+  const harness = makeHarness()
+  assert.equal(harness.listeners.length, 0)
+})
+
+test('POST creates the file only when version is null', async () => {
   const harness = makeHarness()
   const first = await invoke(harness.routes.get('/plugins/agents-md'))
+  assert.equal(harness.files.size, 0)
+  assert.equal(first.body.file.version, null)
+
   const result = await invoke(harness.routes.get('/plugins/agents-md'), {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-dsh-agents-md': '1' },
-    body: JSON.stringify({ content: '# Saved\n', version: first.body.file.version }),
+    body: JSON.stringify({ content: '# Saved\n', version: null }),
   })
   assert.equal(result.status, 200)
   assert.equal(result.body.ok, true)
   assert.equal(harness.files.get(`${CWD}/${FILE_NAME}`), '# Saved\n')
-  assert.notEqual(result.body.file.version, first.body.file.version)
+  assert.match(result.body.file.version, /^v\d+$/)
+
+  const reloaded = await invoke(harness.routes.get('/plugins/agents-md'))
+  assert.equal(reloaded.body.file.exists, true)
+  assert.equal(reloaded.body.file.template, false)
+  assert.equal(reloaded.body.file.content, '# Saved\n')
 })
 
-test('POST reports a conflict for a stale version and leaves the file alone', async () => {
+test('POST updates an existing file with its version and rejects a stale one', async () => {
   const harness = makeHarness()
-  const first = await invoke(harness.routes.get('/plugins/agents-md'))
-  await invoke(harness.routes.get('/plugins/agents-md'), {
+  const headers = { 'content-type': 'application/json', 'x-dsh-agents-md': '1' }
+  const created = await invoke(harness.routes.get('/plugins/agents-md'), {
     method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-dsh-agents-md': '1' },
-    body: JSON.stringify({ content: '# First save\n', version: first.body.file.version }),
+    headers,
+    body: JSON.stringify({ content: '# First save\n', version: null }),
   })
-  const result = await invoke(harness.routes.get('/plugins/agents-md'), {
+  const firstVersion = created.body.file.version
+
+  const updated = await invoke(harness.routes.get('/plugins/agents-md'), {
     method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-dsh-agents-md': '1' },
-    body: JSON.stringify({ content: '# Stale save\n', version: first.body.file.version }),
+    headers,
+    body: JSON.stringify({ content: '# Second save\n', version: firstVersion }),
   })
-  assert.equal(result.status, 409)
-  assert.equal(result.body.error, 'conflict')
-  assert.equal(harness.files.get(`${CWD}/${FILE_NAME}`), '# First save\n')
+  assert.equal(updated.status, 200)
+  assert.notEqual(updated.body.file.version, firstVersion)
+  assert.equal(harness.files.get(`${CWD}/${FILE_NAME}`), '# Second save\n')
+
+  const stale = await invoke(harness.routes.get('/plugins/agents-md'), {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ content: '# Stale save\n', version: firstVersion }),
+  })
+  assert.equal(stale.status, 409)
+  assert.equal(stale.body.error, 'conflict')
+  assert.equal(harness.files.get(`${CWD}/${FILE_NAME}`), '# Second save\n')
 })
 
 test('POST refuses missing editor header, wrong content type, and cross-origin requests', async () => {
@@ -224,25 +261,6 @@ test('unknown sessions and sessions without a workspace are refused', async () =
   const noWorkspace = await invoke(empty.routes.get('/plugins/agents-md'))
   assert.equal(noWorkspace.status, 409)
   assert.equal(noWorkspace.body.error, 'no-workspace')
-})
-
-test('the pre-step seed creates AGENTS.md once and never overwrites it', async () => {
-  const harness = makeHarness()
-  const listener = harness.listeners.find((entry) => entry.event === 'agent/pre-step')
-  assert.ok(listener)
-  let nextCalls = 0
-  const next = async () => {
-    nextCalls += 1
-    return { kind: 'enter', messages: [] }
-  }
-  await listener.listener({ agent: { session: harness.session } }, next)
-  assert.equal(nextCalls, 1)
-  assert.equal(harness.files.get(`${CWD}/${FILE_NAME}`), STARTER_CONTENT)
-
-  harness.files.set(`${CWD}/${FILE_NAME}`, '# Keep me\n')
-  await listener.listener({ agent: { session: harness.session } }, next)
-  assert.equal(nextCalls, 2)
-  assert.equal(harness.files.get(`${CWD}/${FILE_NAME}`), '# Keep me\n')
 })
 
 test('an unsaved draft is returned with the file and a save clears it', async () => {
@@ -294,7 +312,7 @@ test('a draft identical to the file is ignored and cleared', async () => {
 })
 
 test('a draft survives a fresh store instance', async () => {
-  clearDrafts()
+  clearPluginState()
   const first = createDraftStore()
   assert.equal(await first.set(CWD, '# Across restarts\n', Date.now()), true)
   const fresh = createDraftStore()
@@ -359,3 +377,129 @@ test('a late draft cannot undo a save, but a newer draft is accepted', async () 
   assert.equal(afterNewer.body.file.draft.content, '# Newer draft\n')
 })
 
+
+test('the editor follows an existing agent.md variant', async () => {
+  const files = new Map([[`${CWD}/agent.md`, '# Lowercase variant\n']])
+  const harness = makeHarness({ files })
+  const fileRoute = harness.routes.get('/plugins/agents-md')
+  const first = await invoke(fileRoute)
+  assert.equal(first.body.file.name, 'agent.md')
+  assert.equal(first.body.file.content, '# Lowercase variant\n')
+  assert.equal(first.body.file.exists, true)
+
+  const saved = await invoke(fileRoute, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-dsh-agents-md': '1' },
+    body: JSON.stringify({ content: '# Updated variant\n', version: first.body.file.version, includeInGit: false }),
+  })
+  assert.equal(saved.status, 200)
+  assert.equal(harness.files.get(`${CWD}/agent.md`), '# Updated variant\n')
+  assert.equal(harness.files.has(`${CWD}/AGENTS.md`), false)
+  assert.equal(harness.files.get(`${CWD}/.gitignore`), '/agent.md\n')
+})
+
+test('finding an existing AGENTS.md defaults it into .gitignore once', async () => {
+  const files = new Map([[`${CWD}/AGENTS.md`, '# Existing\n']])
+  const harness = makeHarness({ files })
+  const gitRoute = harness.routes.get(GIT_ROUTE_PATH)
+
+  const first = await invoke(gitRoute)
+  assert.equal(first.status, 200)
+  assert.equal(first.body.git.ignored, true)
+  assert.equal(first.body.git.include, false)
+  assert.equal(files.get(`${CWD}/.gitignore`), '/AGENTS.md\n')
+
+  // A manual removal is respected; the one-time default is not re-applied.
+  files.set(`${CWD}/.gitignore`, '')
+  const second = await invoke(gitRoute)
+  assert.equal(second.body.git.ignored, false)
+  assert.equal(second.body.git.include, true)
+  assert.equal(files.get(`${CWD}/.gitignore`), '')
+})
+
+test('the Git switch reads case and singular/plural variants', async () => {
+  const files = new Map([
+    [`${CWD}/AGENTS.md`, '# A\n'],
+    [`${CWD}/.gitignore`, 'agent.md\n'],
+  ])
+  const harness = makeHarness({ files })
+  const gitRoute = harness.routes.get(GIT_ROUTE_PATH)
+
+  const ignored = await invoke(gitRoute)
+  assert.equal(ignored.body.git.ignored, true)
+  assert.equal(ignored.body.git.include, false)
+
+  files.set(`${CWD}/.gitignore`, 'Agents.MD\n')
+  const stillIgnored = await invoke(gitRoute)
+  assert.equal(stillIgnored.body.git.ignored, true)
+
+  files.set(`${CWD}/.gitignore`, '**/Agents.MD\n')
+  const globbed = await invoke(gitRoute)
+  assert.equal(globbed.body.git.ignored, true)
+
+  files.set(`${CWD}/.gitignore`, 'docs/AGENTS.md\n')
+  const elsewhere = await invoke(gitRoute)
+  assert.equal(elsewhere.body.git.ignored, false)
+
+  files.set(`${CWD}/.gitignore`, '*.md\n')
+  const broad = await invoke(gitRoute)
+  assert.equal(broad.body.git.ignored, true)
+  assert.equal(broad.body.git.blockedBy, '*.md')
+})
+
+test('the include toggle removes managed variants and reports a broad blocker', async () => {
+  const files = new Map([
+    [`${CWD}/AGENTS.md`, '# A\n'],
+    [`${CWD}/.gitignore`, 'AGENTS.md\nagent.md\n'],
+  ])
+  const harness = makeHarness({ files })
+  const gitRoute = harness.routes.get(GIT_ROUTE_PATH)
+  const headers = { 'content-type': 'application/json', 'x-dsh-agents-md': '1' }
+
+  const included = await invoke(gitRoute, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ include: true }),
+  })
+  assert.equal(included.status, 200)
+  assert.equal(included.body.git.ignored, false)
+  assert.equal(included.body.git.include, true)
+  assert.equal(files.get(`${CWD}/.gitignore`), '')
+
+  files.set(`${CWD}/.gitignore`, '*.md\n')
+  const blocked = await invoke(gitRoute, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ include: true }),
+  })
+  assert.equal(blocked.body.git.ignored, true)
+  assert.equal(blocked.body.git.include, false)
+  assert.equal(blocked.body.git.blockedBy, '*.md')
+})
+
+test('saving adds an ignore entry by default and honors includeInGit', async () => {
+  const harness = makeHarness()
+  const fileRoute = harness.routes.get('/plugins/agents-md')
+  const headers = { 'content-type': 'application/json', 'x-dsh-agents-md': '1' }
+  const first = await invoke(fileRoute)
+
+  const saved = await invoke(fileRoute, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ content: '# Saved\n', version: null, includeInGit: false }),
+  })
+  assert.equal(saved.status, 200)
+  assert.equal(saved.body.git.include, false)
+  assert.equal(harness.files.get(`${CWD}/.gitignore`), '/AGENTS.md\n')
+
+  const includedHarness = makeHarness()
+  const includedRoute = includedHarness.routes.get('/plugins/agents-md')
+  const included = await invoke(includedRoute, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ content: '# Included\n', version: null, includeInGit: true }),
+  })
+  assert.equal(included.status, 200)
+  assert.equal(included.body.git.include, true)
+  assert.equal(includedHarness.files.has(`${CWD}/.gitignore`), false)
+})

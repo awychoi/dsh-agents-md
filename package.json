@@ -37,6 +37,7 @@
   "files": [
     "index.js",
     "client.js",
+    "gitignore.js",
     "cordis.patch.yml",
     "locale/*.json",
     "icon.svg",

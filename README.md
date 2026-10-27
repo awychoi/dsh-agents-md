@@ -16,8 +16,9 @@ Finder, or finding the file in an editor.
 
 - **Adds an entry to the right sidebar.** Expand the sidebar, press **+**, and
   pick **AGENTS.md** in the guide. The panel opens in that pane.
-- **Creates the file when it is missing.** A workspace without `AGENTS.md`
-  gets a small starter template, so the editor always has something to open.
+- **Opens with a starter template when the file is missing.** A workspace
+  without `AGENTS.md` shows the template in the editor. Nothing is written
+  until you press **Save**.
 - **Edits markdown.** A monospace textarea with line and character counts,
   `Cmd/Ctrl+S` to save, and a **Reload** action.
 - **Shows unsaved changes.** A dot and **Unsaved** label appear next to the
@@ -31,6 +32,10 @@ Finder, or finding the file in an editor.
 - **Saves explicitly.** The agent only sees the file after **Save**. Saving is
   version-guarded: if `AGENTS.md` changed on disk since it was loaded, the
   panel reports a conflict instead of overwriting the other change.
+- **Controls Git visibility.** An **Include … in Git** switch reads the real
+  project `.gitignore` and adds or removes the instruction file. A file found
+  in the workspace is ignored by default; the switch lets you opt it into
+  commits. Manual `.gitignore` edits are read back into the switch.
 
 ## How the agent sees it
 
@@ -77,8 +82,10 @@ No credentials, no settings, and no external network calls.
 
 ## Where the file lives
 
-`AGENTS.md` is created at the session's current working directory — the same
-folder DSH uses for the workspace. The route resolves the file through DSH's
+The panel targets `AGENTS.md` at the session's current working directory — the
+same folder DSH uses for the workspace. If the file is absent, the route returns
+the starter template; opening the panel is read-only and does **not** create it.
+Pressing **Save** creates the file, or updates the existing one, through DSH's
 filesystem service, so the normal file policy still applies: in
 `workspace-write` mode the file is inside the workspace; under `read-only`
 policy the panel can show and draft, but saving is refused.
@@ -92,8 +99,9 @@ The bundle is plain ESM JavaScript with no build step.
 
 | File | Role |
 |---|---|
-| `index.js` | Host half: read/write route, starter template, first-prompt seed |
-| `client.js` | Client half: guide entry, tab body, markdown editor, local drafts |
+| `index.js` | Host half: read/write, draft, and Git routes; starter template; stores |
+| `gitignore.js` | Project-root `.gitignore` parser, variant matcher, and editor |
+| `client.js` | Client half: guide entry, tab body, markdown editor, drafts, Git switch |
 | `cordis.patch.yml` | Inserts the bundle row into the profile |
 | `locale/en.json`, `locale/zh.json` | Plugin-manager title and description |
 | `icon.svg` | Plugin icon and guide artwork |
@@ -105,19 +113,22 @@ npm run check
 npm test
 ```
 
-`npm test` exercises the Host half against an in-memory filesystem: creation,
-read, version-guarded saves, conflicts, request fencing, and the first-prompt
-seed. The Client half is plain `client.js` and has no build step.
+`npm test` exercises the Host half against an in-memory filesystem: template
+reads, create-on-save, version-guarded updates, conflicts, request fencing,
+draft persistence, instruction-file variants, and `.gitignore` handling. The
+Client half is plain `client.js` and has no build step.
 
 ### The route
 
 `GET /plugins/agents-md?sessionId=<id>` returns the file content, its opaque
-filesystem version, and the workspace's unsaved draft if one exists. `POST`
-with a JSON body `{ content, version }` writes the file. The POST requires
-`x-dsh-agents-md: 1`, a JSON content type, and a same-origin request. The route
-is scoped to one live (or persisted) session and always targets `AGENTS.md`
-inside that session's workspace; it cannot be used to read or write arbitrary
-paths.
+filesystem version, and the workspace's unsaved draft if one exists. When the
+file is absent it returns `{ exists: false, template: true, version: null }`
+with the starter content and writes nothing. `POST` with a JSON body
+`{ content, version }` writes the file; `version: null` creates it, a version
+string updates exactly that version. The POST requires `x-dsh-agents-md: 1`, a
+JSON content type, and a same-origin request. The route is scoped to one live
+(or persisted) session and always targets `AGENTS.md` inside that session's
+workspace; it cannot be used to read or write arbitrary paths.
 
 `POST /plugins/agents-md/draft?sessionId=<id>` with `{ content, updatedAt }`
 stores an unsaved draft; `content: null` discards it. The route has the same
@@ -126,13 +137,47 @@ session and request fences. Drafts live under
 when they match the saved file. A monotonic timestamp stops a late in-flight
 draft request from undoing a save.
 
-### The seed
+### Git visibility
 
-On `agent/pre-step`, before the workspace-instruction loader runs, the host
-checks the session workspace once per process. If `AGENTS.md` is absent it
-writes the starter template with `createIfAbsent`. Failures (for example a
-read-only policy) are logged and retried at most once a minute; they never fail
-the agent step.
+The panel manages the **project-root** `.gitignore` (the Git worktree root, or
+the workspace folder when Git is unavailable). When an existing instruction
+file is discovered for the first time and no matching ignore rule exists, the
+plugin applies its default once: it adds `/<relative-path>` to `.gitignore`.
+That one-time marker is stored under `$DSH_HOME/agents-md/git.json`, so a later
+manual removal of the rule is respected and is not overwritten.
+
+The switch is not a local boolean. It is re-read from `.gitignore` on load,
+after every save/toggle, and while the panel is open. The matcher is
+case-insensitive and treats `agent.md` and `agents.md` as the same instruction
+file, including entries such as:
+
+```gitignore
+AGENTS.md
+/agent.md
+**/Agents.MD
+```
+
+Turning the switch on removes those managed variant lines. Turning it off adds
+an anchored entry for the actual file. A broader rule such as `*.md` is not
+deleted; the panel reports that rule as the blocker instead of claiming the
+file is included. If the file is already tracked by Git, the panel says so:
+`.gitignore` cannot untrack an already-tracked file, and you would need
+`git rm --cached` to stop committing it.
+
+The editor also follows an existing variant on disk (`AGENTS.md`, `agents.md`,
+`agent.md`, or any case combination), preferring the canonical `AGENTS.md`.
+DSH's stock instruction loader looks for `AGENTS.md`; on a case-insensitive
+filesystem this is the same file, while a case-sensitive deployment may need
+that loader configured for the alternate spelling.
+
+### No automatic creation
+
+There is no prompt-time seed and no create-on-open. A workspace without
+`AGENTS.md` stays without it until the user presses **Save** in the panel. The
+first save sends `version: null` and the Host writes with `createIfAbsent`, so a
+concurrent creator wins with a conflict instead of being overwritten. This is
+also why the agent never sees the template or a draft: nothing exists at the
+instruction path until Save.
 
 ## Notes and limits
 
