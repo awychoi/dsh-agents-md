@@ -10,7 +10,7 @@ reads the saved file on its next step.
 The point is to change workspace instructions without leaving DSH, opening
 Finder, or finding the file in an editor.
 
-![Illustrative layout: the AGENTS.md panel in the DSH right sidebar](docs/preview.svg)
+![Illustrative dark-theme layout: the AGENTS.md panel in the DSH right sidebar](docs/preview.svg)
 
 ## What it does
 
