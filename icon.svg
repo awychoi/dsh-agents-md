@@ -1,15 +1,17 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="AGENTS.md">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 36" width="36" height="36" role="img" aria-label="AGENTS.md: layered instruction pages with a text caret">
   <defs>
-    <linearGradient id="agents-md-bg" x1="10" y1="4" x2="54" y2="60" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#4D93F8"/>
-      <stop offset="1" stop-color="#1554C7"/>
+    <linearGradient id="ab-back" x1="11" y1="6" x2="30" y2="27" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#E4F8FA"/>
+      <stop offset="1" stop-color="#CBEEF4"/>
+    </linearGradient>
+    <linearGradient id="ab-front" x1="6" y1="10" x2="26" y2="33" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F6FAFF"/>
+      <stop offset="1" stop-color="#EAF3FF"/>
     </linearGradient>
   </defs>
-  <rect width="64" height="64" rx="15" fill="url(#agents-md-bg)"/>
-  <path d="M22 12.5h14.8L44 19.7v9.6" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M36.4 12.5v7.6H44" fill="none" stroke="#BFD8FF" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M22 12.5a3 3 0 0 0-3 3v31a3 3 0 0 0 3 3h5.2" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round"/>
-  <path d="M25 23.5h9.5M25 30h14M25 36.5h9.5" stroke="#BFD8FF" stroke-width="2.6" stroke-linecap="round"/>
-  <path d="M45.2 31.8l3.1 3.1-13.4 13.4h-6.2v-6.2z" fill="#fff" stroke="#1554C7" stroke-width="2.4" stroke-linejoin="round"/>
-  <path d="M48.9 28.1l1.8-1.8a2.2 2.2 0 0 1 3.1 0l1.9 1.9a2.2 2.2 0 0 1 0 3.1l-1.8 1.8" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round"/>
+  <path d="M15.5 5.5h7.7l6.5 6.5v9.7a4.9 4.9 0 0 1-4.9 4.9H15.5a4.9 4.9 0 0 1-4.9-4.9V10.4a4.9 4.9 0 0 1 4.9-4.9Z" fill="url(#ab-back)" stroke="#62C7D6" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M10.8 10.1h8.8l6.4 6.4v11.1a4.9 4.9 0 0 1-4.9 4.9H10.8a4.9 4.9 0 0 1-4.9-4.9V15a4.9 4.9 0 0 1 4.9-4.9Z" fill="url(#ab-front)" stroke="#4D7FF3" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M19.5 10.1v5.2a1.8 1.8 0 0 0 1.8 1.8h4.7" fill="#D8E8FF" stroke="#4D7FF3" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M11.6 22h8.4M11.6 26.3h5.6" fill="none" stroke="#7FA7F2" stroke-width="2" stroke-linecap="round"/>
+  <path d="M21.2 24.2v4.2" fill="none" stroke="#2F6BFF" stroke-width="2.2" stroke-linecap="round"/>
 </svg>
