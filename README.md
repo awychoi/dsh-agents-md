@@ -105,6 +105,9 @@ The bundle is plain ESM JavaScript with no build step.
 | `cordis.patch.yml` | Inserts the bundle row into the profile |
 | `locale/en.json`, `locale/zh.json` | Plugin-manager title and description |
 | `icon.svg` | Plugin icon and guide artwork |
+| `icon-white.svg` | Solid-white website icon for dark backgrounds; exported as `./icon-white` |
+
+Both icons are transparent SVGs. `icon-white.svg` is a single-color mark for dark backgrounds and is not used by the plugin manager.
 
 Useful checks:
 
