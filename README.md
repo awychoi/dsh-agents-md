@@ -1,4 +1,4 @@
-# <img src="icon.svg" width="36" height="36" alt="" align="middle"> AGENTS.md
+# <img src="icon.svg" width="36" height="36" alt="" align="absmiddle"> AGENTS.md
 
 **A right-sidebar markdown editor for your harness workspace instructions.**
 
