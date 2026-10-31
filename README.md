@@ -13,6 +13,8 @@ own instruction loader reads the saved file on the next step.
 - Opens a plain markdown editor for `AGENTS.md` in the current workspace.
   Missing files show a starter template but are not created until you press
   **Save**.
+- Shows its shortcut on the guide card. The default is **⌘⇧E** on Desktop and
+  **⌥⌘E** on Web; both can be changed in **Settings → Keyboard shortcuts**.
 - Keeps unsaved work. Drafts are stored on the Host and mirrored in
   `localStorage`, so they survive reloads, browser changes, and DSH Desktop's
   changing port.
@@ -58,7 +60,7 @@ own instruction loader reads the saved file on the next step.
 2. Enter `https://github.com/awychoi/dsh-agents-md`, or the absolute path to a
    local checkout.
 3. Enable the bundle, expand the right sidebar, press **+**, and choose
-   **AGENTS.md**.
+   **AGENTS.md** — or use the shortcut shown on its guide card.
 
 No credentials, settings, or external network calls.
 

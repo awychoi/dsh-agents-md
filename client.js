@@ -10,6 +10,7 @@ window.__ModuleLoader__.load({
     const ROUTE_PATH = '/plugins/agents-md'
     const DRAFT_ROUTE_PATH = '/plugins/agents-md/draft'
     const GIT_ROUTE_PATH = '/plugins/agents-md/gitignore'
+    const OPEN_SHORTCUT_ID = 'agents-md.open'
     const DRAFT_PREFIX = 'dsh.agents-md.draft.v1:'
     const DRAFT_DELAY_MS = 300
     const MAX_EDITOR_BYTES = 2 * 1024 * 1024
@@ -66,6 +67,8 @@ window.__ModuleLoader__.load({
       'gitError': 'Could not update .gitignore: {message}',
       'gitNotApplied': 'The Git preference could not be applied.',
       'gitTracked': 'Already tracked by Git; .gitignore will not remove it from commits.',
+      'shortcut.label': 'Open AGENTS.md',
+      'shortcut.noSession': 'Open a session first',
     }
 
     const zh = {
@@ -120,6 +123,8 @@ window.__ModuleLoader__.load({
       'gitError': '无法更新 .gitignore：{message}',
       'gitNotApplied': '无法应用 Git 偏好设置。',
       'gitTracked': '此文件已被 Git 跟踪；.gitignore 不会将其从提交中移除。',
+      'shortcut.label': '打开 AGENTS.md',
+      'shortcut.noSession': '请先选择会话',
     }
 
     const css = `
@@ -1112,7 +1117,7 @@ window.__ModuleLoader__.load({
     }
 
     return {
-      inject: ['slots', 'locale', 'sidebarRightTabs'],
+      inject: ['slots', 'locale', 'sidebarRightTabs', 'sidebarRight'],
       apply(ctx) {
         const t = ctx.locale.bind(NS)
 
@@ -1121,6 +1126,38 @@ window.__ModuleLoader__.load({
           'agents-md: dictionaries',
         )
 
+        ctx.inject(['shortcuts'], (scope) => {
+          scope.effect(
+            () => scope.shortcuts.register({
+              id: OPEN_SHORTCUT_ID,
+              label: () => t('shortcut.label'),
+              aliases: ['agents md', 'agents.md', 'agent instructions'],
+              defaults: {
+                'desktop:macos': { code: 'KeyE', modifiers: ['primary', 'shift'] },
+                'desktop:windows': { code: 'KeyE', modifiers: ['primary', 'shift'] },
+                'desktop:linux': { code: 'KeyE', modifiers: ['primary', 'shift'] },
+                'web:macos': { code: 'KeyE', modifiers: ['primary', 'alt'] },
+                'web:windows': { code: 'KeyE', modifiers: ['primary', 'alt'] },
+              },
+              regions: ['page', 'editable', 'terminal'],
+              modals: [],
+              resolve: ({ target: element }) => {
+                const target = scope.sidebarRight.commandTarget(element)
+                if (target === undefined) {
+                  return { status: 'blocked', reason: t('shortcut.noSession') }
+                }
+                return {
+                  status: 'handled',
+                  run: () => {
+                    scope.sidebarRight.openTabFromTarget(KIND, target)
+                  },
+                }
+              },
+            }),
+            'agents-md: open shortcut',
+          )
+        })
+
         ctx.effect(
           () => ctx.sidebarRightTabs.register({
             id: PLUGIN_ID,
@@ -1128,6 +1165,7 @@ window.__ModuleLoader__.load({
             title: () => t('type.label'),
             guide: [{
               id: 'agents-md',
+              commandId: OPEN_SHORTCUT_ID,
               order: 20,
               title: () => t('guide.title'),
               description: () => t('guide.description'),
